@@ -1,0 +1,46 @@
+cat > /Users/Ani/Desktop/research/powergrid/README.md <<'EOF'
+# powergrid
+
+Research notebooks for power grid analysis, run in JupyterLab.
+
+## Requirements
+
+- Python 3 (with the `venv` module)
+- macOS or Linux shell
+
+Python packages are listed in `requirements.txt`: `jupyterlab`, `numpy`, `pandas`.
+
+## Setup
+
+From the repository root:
+
+```bash
+bash setup.sh
+```
+
+This script:
+
+1. Creates a virtual environment in `venv/`
+2. Installs `ipykernel` and the packages from `requirements.txt` into it
+3. Registers the environment as a Jupyter kernel named **Python (myenv)**
+
+## Running
+
+```bash
+source venv/bin/activate
+jupyter lab
+```
+
+In JupyterLab, select the **Python (myenv)** kernel for your notebooks.
+
+To leave the virtual environment afterwards, run `deactivate`.
+
+## Adding packages
+
+Add the package to `requirements.txt`, then install it into the environment:
+
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+```
+EOF

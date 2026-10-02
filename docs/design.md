@@ -53,6 +53,7 @@ The code is six Python modules in `src/`, with one notebook that drives them. `g
 | `env.py` | `GridEnv`, `StateEncoder`, `Action`, `RewardConfig` | Part B: episode reset, state encoding, action application, reward |
 | `agent.py` | `QLearningAgent`, `Trainer` | Q-table, ε-greedy action choice, Q-update, training loop |
 | `evaluate.py` | `Policy` and 5 subclasses, `Evaluator` | Run the agent and four baselines on fixed test scenarios, produce metrics and plots |
+| `viz.py` | — | Shared plot palette, matplotlib style, grid-map helpers |
 
 ```mermaid
 flowchart LR
@@ -132,6 +133,7 @@ classDiagram
         SHIFT_ALL_BEST
         SPLIT_PROPORTIONAL
         SHED_EXCESS
+        SPLIT_EVEN (baseline only)
     }
 
     class StateEncoder {
@@ -156,6 +158,8 @@ classDiagram
         +RewardConfig reward_cfg
         +int max_rounds
         +reset(seed) list~tuple~
+        +state(i) int
+        +next_actor() int
         +apply_action(i, action) float
         +end_round() list~Transition~
         +done() bool
@@ -268,13 +272,16 @@ The weights put the node's own stress first, spillover second and exposure third
 
 **Validation by simulation**
 
-1. Run the post-outage grid to stability with no intervention and record the baseline set of failures.
-2. For each active node, fail it on a fresh copy of the post-outage grid, run to stability, and record the extra failures above the baseline.
-3. Report the Spearman rank correlation between V and extra failures, and the overlap between the top 10 by V and the top 10 by simulation.
+1. Run the post-outage grid to stability with no intervention, one failure wave at a time.
+2. Label each active node with the wave in which it fails, or *survived*.
+3. Report the Spearman rank correlation between V and earliness of failure, and the AUC: the probability that a node that failed has a higher V than a node that survived.
+4. Repeat both on non-Critical nodes only, since Critical nodes fail in wave 1 by definition.
 
-This takes 100 short simulations, a few seconds. A weak correlation means the weights need revisiting, not that the approach fails.
+*Revised during implementation.* The first plan failed each node alone and counted the extra failures. On this data the uncontrolled cascade already takes out 54 of the 68 active nodes, so a single extra failure changes almost nothing and the check was meaningless (ρ = −0.25).
 
-**Outputs:** a ranked table (node, s, p, f, V, tier, simulated extra failures) and a map of the grid coloured by tier.
+**Result on the dataset:** ρ = 0.81 and AUC = 0.82 over all active nodes; ρ = 0.59 and AUC = 0.71 over non-Critical nodes.
+
+**Outputs:** a ranked table (node, s, p, f, V, tier, failure wave in the uncontrolled cascade) and a map of the grid coloured by tier.
 
 ## 6. Part B: Q-learning load redistribution
 
@@ -284,8 +291,8 @@ A single tabular Q-learning agent learns one shared Q-table of 64 states × 5 ac
 
 1. **Reset.** Copy the base grid, apply ±15% demand noise, take the damaged nodes offline, optionally fail one extra random node (A5), and split the offline load to active neighbours (A2).
 2. **Round.** Repeat until no node is overloaded or 20 rounds have passed:
-    1. List overloaded active nodes, most overloaded first.
-    2. For each one in that order: encode its state, choose an action, apply it. Later nodes see the effect of earlier actions in the same round.
+    1. Pick the most overloaded active node that has not acted yet this round (`next_actor()`). The list is re-checked after every action, so a node pushed over capacity by a neighbour earlier in the round also gets to act.
+    2. Encode its state, choose an action and apply it. Repeat from step 1 until every overloaded node has acted once.
     3. Run one failure wave (`CascadeSimulator.step()`): every node still above capacity fails, and its load is split equally among its active neighbours.
     4. Compute each acting node's reward and next state, and emit one transition per acting node.
 3. **End.** Record failures, shed load, demand served and rounds taken.
@@ -313,6 +320,8 @@ Actions are defined relative to the node's own neighbours, so one table works fo
 | 4 | `SHED_EXCESS` | Reduce the node's load to its capacity; the excess counts as shed (unserved) load |
 
 If a node has no active neighbours, actions 1–3 behave as `HOLD`.
+
+A sixth action, `SPLIT_EVEN` (split the excess equally across active neighbours), exists only for `EvenSplitPolicy`. It is not in the agent's action set.
 
 ### 6.4 Reward
 
@@ -371,15 +380,14 @@ sequenceDiagram
     VA->>VA: tier() per node
     VA-->>NB: ranked DataFrame
     NB->>VA: validate(post-outage grid)
-    VA->>CS: run_until_stable() on a copy (baseline)
-    CS-->>VA: baseline failures
-    loop each active node i
-        VA->>CS: new simulator on a copy, fail_node(i)
-        VA->>CS: run_until_stable()
-        CS-->>VA: failures
-        VA->>VA: extra failures = failures − baseline
+    VA->>CS: new simulator on a copy
+    loop until no node fails
+        VA->>CS: step()
+        CS-->>VA: nodes failed in this wave
+        VA->>VA: record fail wave per node
     end
-    VA-->>NB: Spearman ρ, top-10 overlap
+    VA->>VA: Spearman ρ and AUC, all and non-Critical
+    VA-->>NB: validation result
     NB-->>User: ranked table and risk map
 ```
 
@@ -471,7 +479,7 @@ The agent and four fixed rules run on the same 500 test scenarios (seeds 100,000
 
 - Nodes failed beyond the initial outage
 - Load shed (MW)
-- Demand served (% of total demand)
+- Demand served (% of total demand). Unserved = shed load + load lost when a failed node had no active neighbour left.
 - Rounds to stability
 
 **Success criterion:** the agent fails fewer nodes than every non-shedding baseline, and sheds less load than `ShedPolicy`, by a margin larger than one standard error.
